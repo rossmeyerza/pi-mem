@@ -357,7 +357,15 @@ export function isLowActivity(config: MemoryConfig): boolean {
 
 // --- Memory context builder ---
 
-export function buildMemoryContext(config: MemoryConfig): string {
+function formatMemorySections(title: string, sections: string[]): string {
+	if (sections.length === 0) {
+		return "";
+	}
+
+	return `# ${title}\n\n${sections.join("\n\n---\n\n")}`;
+}
+
+export function buildStableMemoryContext(config: MemoryConfig): string {
 	ensureDirs(config);
 	const sections: string[] = [];
 
@@ -373,6 +381,13 @@ export function buildMemoryContext(config: MemoryConfig): string {
 	if (longTerm?.trim()) {
 		sections.push(`## MEMORY.md (long-term)\n\n${longTerm.trim()}`);
 	}
+
+	return formatMemorySections("Memory", sections);
+}
+
+export function buildVolatileMemoryContext(config: MemoryConfig): string {
+	ensureDirs(config);
+	const sections: string[] = [];
 
 	const today = todayStr();
 	const yesterday = yesterdayStr();
@@ -443,11 +458,17 @@ export function buildMemoryContext(config: MemoryConfig): string {
 		sections.push(s);
 	}
 
-	if (sections.length === 0) {
-		return "";
-	}
+	return formatMemorySections("Recent Memory", sections);
+}
 
-	return `# Memory\n\n${sections.join("\n\n---\n\n")}`;
+export function buildMemoryContext(config: MemoryConfig): string {
+	ensureDirs(config);
+	const sections = [
+		buildStableMemoryContext(config).replace(/^# Memory\n\n/, ""),
+		buildVolatileMemoryContext(config).replace(/^# Recent Memory\n\n/, ""),
+	].filter(Boolean);
+
+	return formatMemorySections("Memory", sections);
 }
 
 // --- Session scanner ---

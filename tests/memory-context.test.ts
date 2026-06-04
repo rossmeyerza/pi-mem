@@ -1,7 +1,16 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import * as fs from "node:fs";
-import { buildMemoryContext, ensureDirs, todayStr, yesterdayStr, daysAgoStr, isLowActivity } from "../lib.ts";
+import {
+	buildMemoryContext,
+	buildStableMemoryContext,
+	buildVolatileMemoryContext,
+	ensureDirs,
+	todayStr,
+	yesterdayStr,
+	daysAgoStr,
+	isLowActivity,
+} from "../lib.ts";
 import { makeTempDir, cleanup, makeConfig, writeFile } from "./helpers.ts";
 
 let tmpDir: string;
@@ -184,6 +193,40 @@ describe("buildMemoryContext", () => {
 		const cIdx = result.indexOf("## C.md");
 		assert.ok(aIdx < bIdx);
 		assert.ok(bIdx < cIdx);
+	});
+});
+
+describe("split memory context builders", () => {
+	it("stable context includes configured context files and MEMORY.md only", () => {
+		const config = makeConfig(tmpDir, { contextFiles: ["SOUL.md"] });
+		ensureDirs(config);
+		writeFile(`${config.memoryDir}/SOUL.md`, "Identity rules");
+		fs.writeFileSync(config.memoryFile, "Durable fact", "utf-8");
+		writeFile(`${config.dailyDir}/${todayStr()}.md`, "Today should stay volatile");
+		writeFile(`${config.memoryDir}/catchup/${todayStr()}/INDEX.md`, "Catchup should stay volatile");
+
+		const result = buildStableMemoryContext(config);
+		assert.ok(result.includes("# Memory"));
+		assert.ok(result.includes("## SOUL.md"));
+		assert.ok(result.includes("Durable fact"));
+		assert.ok(!result.includes("Today should stay volatile"));
+		assert.ok(!result.includes("Catchup should stay volatile"));
+	});
+
+	it("volatile context includes daily and catchup content only", () => {
+		const config = makeConfig(tmpDir, { contextFiles: ["SOUL.md"] });
+		ensureDirs(config);
+		writeFile(`${config.memoryDir}/SOUL.md`, "Identity rules");
+		fs.writeFileSync(config.memoryFile, "Durable fact", "utf-8");
+		writeFile(`${config.dailyDir}/${todayStr()}.md`, "Today content");
+		writeFile(`${config.memoryDir}/catchup/${todayStr()}/INDEX.md`, "Catchup content");
+
+		const result = buildVolatileMemoryContext(config);
+		assert.ok(result.includes("# Recent Memory"));
+		assert.ok(result.includes("Today content"));
+		assert.ok(result.includes("Catchup content"));
+		assert.ok(!result.includes("Identity rules"));
+		assert.ok(!result.includes("Durable fact"));
 	});
 });
 

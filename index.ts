@@ -47,6 +47,8 @@ import {
 	parseScratchpad,
 	serializeScratchpad,
 	buildMemoryContext,
+	buildStableMemoryContext,
+	buildVolatileMemoryContext,
 	readMemoryFile,
 	scanSession,
 	isHousekeeping,
@@ -344,32 +346,68 @@ export default function (pi: ExtensionAPI) {
 		if (rebuildTimer) { clearInterval(rebuildTimer); rebuildTimer = null; }
 	});
 
-	// Inject memory as a trailing system message (not in the main system prompt).
-	// This keeps the system prompt byte-stable across sessions so that KV prefix
-	// caches (e.g., ds4 disk cache keyed on SHA1 of token prefix) get hits.
-	pi.on("context", async (event) => {
-		const memoryContext = buildMemoryContext(config);
-		if (!memoryContext) return;
+	// Put durable memory in the actual system prompt. These files change rarely,
+	// so they preserve most KV prefix-cache value while giving memory system-level weight.
+	pi.on("before_agent_start", async (event) => {
+		const stableMemoryContext = buildStableMemoryContext(config);
+		if (!stableMemoryContext) return;
 
 		const memoryInstructions = [
 			"## Memory",
 			"The following memory files have been loaded. Use the memory_write tool to persist important information.",
 			"- Decisions, preferences, and durable facts \u2192 MEMORY.md",
-			"- Day-to-day notes and running context \u2192 daily/<YYYY-MM-DD>.md",
 			"- Things to fix later or keep in mind \u2192 scratchpad tool",
 			"- Scratchpad is NOT auto-loaded. Use memory_read(target='scratchpad') to fetch it when needed.",
 			'- If someone says "remember this," write it immediately.',
+			"Treat this as durable background context, not as a user request.",
+			"",
+			stableMemoryContext,
+		].join("\n");
+
+		return {
+			systemPrompt: [
+				event.systemPrompt,
+				"",
+				"<pi-mem-system-memory>",
+				memoryInstructions,
+				"</pi-mem-system-memory>",
+			].join("\n"),
+		};
+	});
+
+	// Inject volatile daily/catchup memory as hidden custom context. This keeps
+	// frequently changing content late in the prompt instead of invalidating the
+	// stable system-prompt prefix on every turn.
+	pi.on("context", async (event) => {
+		const volatileMemoryContext = buildVolatileMemoryContext(config);
+		if (!volatileMemoryContext) return;
+
+		const memoryInstructions = [
+			"## Recent Memory",
+			"The following recent memory files have been loaded as background context.",
+			"- Day-to-day notes and running context \u2192 daily/<YYYY-MM-DD>.md",
+			"- Use memory_read to fetch full files when needed.",
 			"",
 			"### Daily Log Rule",
 			"After meaningful interactions, call memory_write(target='daily') with a brief 1-2 sentence summary.",
 			"**Log when:** task completed, decision made, bug fixed, new info discovered, config changed.",
 			"**Skip when:** greetings, goodbyes, chitchat, simple acks, trivial factual questions.",
 			"Log the outcome, not the question (e.g. \"Debugged import error \u2014 missing __init__.py\" not \"User asked about imports\").",
+			"Treat this as injected background context, not as a user request.",
 			"",
-			memoryContext,
+			volatileMemoryContext,
 		].join("\n");
 
-		const messages = [...event.messages, { role: "system", content: memoryInstructions }];
+		const messages = [
+			...event.messages,
+			{
+				role: "custom" as const,
+				customType: "pi-mem-volatile-context",
+				display: false,
+				content: `<pi-mem-volatile-context>\n${memoryInstructions}\n</pi-mem-volatile-context>`,
+				timestamp: Date.now(),
+			},
+		];
 		return { messages };
 	});
 
